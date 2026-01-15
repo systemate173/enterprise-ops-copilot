@@ -10,9 +10,9 @@ Purpose:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Tuple, Any
 from enum import Enum
 
 
@@ -23,7 +23,7 @@ class Category(str, Enum):
     ENGINEERING = "Engineering"
     GENERAL_OPS = "General Ops"
 
-class Urgency(str, Enum)
+class Urgency(str, Enum):
     HIGH = "High"
     MEDIUM = "Medium"
     LOW = "Low"
@@ -72,9 +72,9 @@ def _simple_ticket_id(text: str) -> str:
 def _normalize(text: str) -> str:
     return (text or "").strip()
 
-def _contains_any(text: str, keywords: List[str]) -> bool:
+def _contains_any(text: str, keywords: List[str]) -> List[str]:
     t = text.lower()
-    return any(k in t for k in keywords)
+    return any(k for k in keywords if k in t)
 
 CATEGORY_RULES: List[Tuple[Category, List[str], List[str]]] = [
     # (category, keywords, suspected_systems)
@@ -208,7 +208,6 @@ def _missing_info_questions(raw: str) -> List[str]:
 
     return questions
 
-from typing import Any, Dict
 def triage_incident(text: str) -> Dict[str, Any]:
     """
     Convert raw incident text into a structured ticket.
