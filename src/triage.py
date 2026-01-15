@@ -13,6 +13,21 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Dict, List
+from enum import Enum
+
+
+class Category(str, Enum):
+    IT_OPS = "IT Ops"
+    CUSTOMER_SUPPORT = "Customer Support"
+    OPERATIONS = "Operations"
+    ENGINEERING = "Engineering"
+    GENERAL_OPS = "General Ops"
+
+class Urgency(str, Enum)
+    HIGH = "High"
+    MEDIUM = "Medium"
+    LOW = "Low"
+    UNKNOWN = "Unknown"
 
 
 @dataclass
@@ -21,12 +36,28 @@ class IncidentTicket:
     created_at_utc: str
     title: str
     description: str
+    
     category: str
     urgency: str
     impact: str
+    
     suspected_systems: List[str]
+    
+    #Hallucination prevention
+    matched_keywords: Dict[str, List[str]]
+    reasoning: List[str]
+    confidence: float
+    
+    #Human in the loop
+    needs_human_review: bool
     missing_info_questions: List[str]
+    
+    #Action
     next_actions: List[str]
+    
+    #RAG hooks (EMPTY, add in later)
+    recommended_runbooks: List[str] = field(default_factory=list)
+    citations: List[Dict[str, str]] = field(default_factory=list)  # {"doc_id": "...", "chunk_id":"...", "quote":"..."}
 
 
 def _utc_now_iso() -> str:
