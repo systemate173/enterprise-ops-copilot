@@ -74,7 +74,7 @@ def _normalize(text: str) -> str:
 
 def _contains_any(text: str, keywords: List[str]) -> List[str]:
     t = text.lower()
-    return any(k for k in keywords if k in t)
+    return [k for k in keywords if k in t]
 
 CATEGORY_RULES: List[Tuple[Category, List[str], List[str]]] = [
     # (category, keywords, suspected_systems)
