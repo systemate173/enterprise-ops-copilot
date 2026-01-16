@@ -1,0 +1,5 @@
+
+
+Several customers report being unable to log in when 
+using Safari on macOS. Chrome and Firefox appear unaffected. 
+Issue started after yesterday’s frontend deployment.

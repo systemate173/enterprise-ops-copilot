@@ -1,0 +1,4 @@
+
+
+Customers report charges failing at checkout.
+Billing error occurs intermittently. Started today in production.

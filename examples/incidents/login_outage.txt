@@ -1,0 +1,6 @@
+
+
+
+Users cannot log in to the internal dashboard.
+Error: Authentication service unavailable (503).
+Started ~10 minutes ago. Affects multiple teams. Production.
