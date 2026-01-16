@@ -27,10 +27,12 @@ This project demonstrates how AI can **assist decisions**, not replace people.
 - `examples/` — sample inputs and expected outputs
 
 ## Demo (CLI)
-Run `demo_triage.py` in VS Code (Run ▶️). Paste an incident, end with an empty line.
+Run `demo_triage.py` in VS Code (Run ▶️).
+
+-Option 1: loads sample incidents from 'examples/incidents/'
+-Option 2: allows pasting a custom incident
 
 Example inputs are in `examples/incidents/`.
-
 
 ## Status
 Active Development — Core triage logic, tests, and CI are complete.  
