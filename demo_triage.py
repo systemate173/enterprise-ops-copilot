@@ -4,6 +4,7 @@ import json
 
 from pathlib import Path
 from src.triage import triage_incident
+from src.retrieve import retrieve_runbooks
 
 
 import json
@@ -18,6 +19,18 @@ EXAMPLES_DIR = Path(__file__).parent / "examples" / "incidents"
 def _print_ticket(ticket: dict) -> None:
     print("\n--- TRIAGE OUTPUT ---")
     print(json.dumps(ticket, indent=2))
+    
+    runbooks = ticket.get("recommeneded_runbooks", [])
+    if not runbooks:
+        return
+    
+    docs = retrieve_runbooks(runbooks)
+    
+    if docs:
+        print("\n--- RETRIEVED DOCUMENTATION ---")
+        for doc in docs:
+            print(f"\n[{doc['doc_id']}]")
+            print(doc["excerpt"])
 
 
 def _load_example_files() -> list[Path]:
