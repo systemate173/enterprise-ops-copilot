@@ -5,7 +5,7 @@ from typing import Dict, List
 RUNBOOKS_DIR = Path(__file__).parent.parent / "docs" / "runbooks"
 
 
-def retrieve_runbooks(runbook_ids: List[str], max_chars: int = 500) -> List[Dict]:
+def retrieve_runbooks(runbook_ids: List[str], max_chars: int = 750) -> List[Dict]:
     """
     Deterministically retrieve runbook documents by ID.
     """
