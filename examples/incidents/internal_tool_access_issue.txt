@@ -1,0 +1,6 @@
+Sales and support teams report being unable to access the internal order management tool.
+Users receive a “403 Forbidden” error after logging in.
+
+The issue started after a permissions update made yesterday afternoon.
+IT is reviewing role-based access settings.
+Teams are currently using read-only backups while the issue is resolved.

@@ -1,0 +1,6 @@
+Customers contacted support stating they did not receive order confirmation emails.
+Orders were successfully placed, but no confirmation or shipping emails were sent.
+
+The issue was traced to a misconfigured SMTP credential that expired overnight.
+Credentials were updated and email delivery resumed.
+Missed emails were resent to affected customers.

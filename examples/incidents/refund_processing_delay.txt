@@ -1,0 +1,6 @@
+Refunds requested earlier this week were not processed within the normal 3–5 business day window.
+Customers contacted support asking about the delay.
+
+The issue was caused by a backlog in the payment processor’s refund queue.
+The backlog has cleared and refunds are now processing normally.
+Support followed up with affected customers.

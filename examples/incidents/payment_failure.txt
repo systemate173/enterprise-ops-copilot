@@ -1,4 +1,8 @@
+Customers are reporting that credit card payments are failing during checkout.
+The error message shown is “Payment could not be processed at this time.”
+This appears to be happening intermittently, mostly during peak hours.
 
+Support has confirmed the issue is not limited to one card type or bank.
+No recent payment system changes were made.
+Issue is currently under investigation.
 
-Customers report charges failing at checkout.
-Billing error occurs intermittently. Started today in production.

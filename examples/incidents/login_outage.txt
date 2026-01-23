@@ -1,6 +1,7 @@
+Several users reported they were unable to log in to their accounts this morning.
+The login page would refresh after submitting credentials without any error message.
+Issue appeared to affect Safari users on macOS only.
 
-
-
-Users cannot log in to the internal dashboard.
-Error: Authentication service unavailable (503).
-Started ~10 minutes ago. Affects multiple teams. Production.
+Engineering identified a frontend bug introduced in yesterday’s deployment related to cookie handling.
+A hotfix was deployed at 11:42 AM EST and login functionality was restored.
+Customers confirmed successful login after fix.

@@ -1,0 +1,6 @@
+Discrepancy found between website inventory and warehouse stock counts.
+Customers were able to place orders for items that were actually out of stock.
+
+Root cause was a failed overnight inventory sync job.
+The job was manually rerun and monitoring was added.
+Inventory counts are now accurate across systems.

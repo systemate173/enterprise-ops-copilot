@@ -1,0 +1,6 @@
+Users on iOS are reporting that the mobile app crashes immediately after opening.
+The issue started after the most recent app update released last night.
+
+Android users are not affected.
+Crash logs have been submitted to engineering.
+Rollback is being considered if a quick fix cannot be deployed.

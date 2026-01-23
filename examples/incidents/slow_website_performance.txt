@@ -1,0 +1,6 @@
+Website performance has been noticeably slow since early this morning.
+Pages take 5–10 seconds to load, especially product search and checkout.
+
+No outages reported, but server load is higher than usual.
+Engineering suspects increased traffic combined with database query latency.
+Performance tuning is ongoing.

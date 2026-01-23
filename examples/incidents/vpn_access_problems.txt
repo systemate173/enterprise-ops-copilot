@@ -1,0 +1,6 @@
+Several employees are unable to connect to the corporate VPN when working remotely.
+Error message indicates authentication failure.
+
+Issue appears to affect new hires more frequently than existing employees.
+IT is reviewing VPN access logs and user permissions.
+No resolution at this time.

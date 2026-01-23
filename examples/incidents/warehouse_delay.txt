@@ -1,0 +1,6 @@
+Multiple orders placed on Friday were delayed and not shipped as expected.
+Warehouse staff reported the label printing system was down for several hours.
+
+IT restarted the print server and replaced a faulty network switch.
+Backlogged orders were shipped the same day.
+No further delays have been reported since Saturday.
