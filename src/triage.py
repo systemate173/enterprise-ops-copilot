@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Any
+from src.retrieve import retrieve_runbooks
 from enum import Enum
 
 
@@ -264,6 +265,8 @@ def triage_incident(text: str) -> Dict[str, Any]:
         recommended_runbooks = ["RBK-ENG-CICD-101"]
     elif category == Category.OPERATIONS:
         recommended_runbooks = ["RBK-OPS-LOGISTICS-050"]
+        
+    citations = retrieve_runbooks(recommended_runbooks)
 
     ticket = IncidentTicket(
         ticket_id=_simple_ticket_id(raw),
@@ -284,7 +287,7 @@ def triage_incident(text: str) -> Dict[str, Any]:
         next_actions=next_actions,
 
         recommended_runbooks=recommended_runbooks,
-        citations=[],
+        citations = citations,
     )
 
     return asdict(ticket)
