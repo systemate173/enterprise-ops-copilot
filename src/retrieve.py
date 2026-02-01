@@ -22,7 +22,7 @@ def retrieve_runbooks(runbook_ids: List[str], max_chars: int = 750) -> List[Dict
         results.append(
             {
                 "doc_id": rbk_id,
-                "path": str(path),
+                "path": str(path.relative_to(Path(__file__).parent.parent)),
                 "excerpt": excerpt,
             }
         )
