@@ -264,7 +264,13 @@ def triage_incident(text: str) -> Dict[str, Any]:
     elif category == Category.ENGINEERING:
         recommended_runbooks = ["RBK-ENG-CICD-101"]
     elif category == Category.OPERATIONS:
-        recommended_runbooks = ["RBK-OPS-LOGISTICS-050"]
+    # Distinguish inventory sync issues vs warehouse system outages
+        wms_indicators = ["label", "printer", "print", "wms", "warehouse system", "packing", "shipping"]
+        if _contains_any(raw, wms_indicators):
+            recommended_runbooks = ["RBK-OPS-WMS-060"]
+        else:
+            recommended_runbooks = ["RBK-OPS-LOGISTICS-050"]
+
         
     citations = retrieve_runbooks(recommended_runbooks)
 
