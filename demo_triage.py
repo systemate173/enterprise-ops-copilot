@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from src.triage import triage_incident
 from src.retrieve import retrieve_runbooks
+from src.summarize import summarize_ticket
 
 
 
@@ -16,21 +17,24 @@ def _print_ticket(ticket: dict) -> None:
     print(json.dumps(ticket, indent=2))
 
     runbooks = ticket.get("recommended_runbooks", [])
+
     print("\n--- RETRIEVED DOCUMENTATION ---")
 
+    docs = []
     if not runbooks:
         print("(No runbooks recommended.)")
-        return
+    else:
+        docs = retrieve_runbooks(runbooks)
+        if not docs:
+            print("(No runbooks found for the recommended IDs.)")
+        else:
+            for doc in docs:
+                print(f"\n[{doc['doc_id']}]")
+                print(doc["excerpt"])
 
-    docs = retrieve_runbooks(runbooks)
-
-    if not docs:
-        print("(No runbooks found for the recommended IDs.)")
-        return
-
-    for doc in docs:
-        print(f"\n[{doc['doc_id']}]")
-        print(doc["excerpt"])
+    summary = summarize_ticket(ticket)
+    print("\n--- MANAGER SUMMARY (DETERMINISTIC) ---")
+    print(json.dumps(summary, indent=2))
 
 
 def _load_example_files() -> list[Path]:
