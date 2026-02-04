@@ -176,6 +176,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     sources = [c.get("doc_id") for c in citations if c.get("doc_id")]
     ready = bool(sources)
+    blocker_reason = None if ready else "no_citations"
 
     # Deterministic highlights (only if we actually have citations)
     highlights: List[str] = _highlights_from_citations(citations, max_total=4) if ready else []
@@ -202,6 +203,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "ready": ready,
+        "blocker_reason": blocker_reason,
         "summary": summary,
         "highlights": highlights,              # NEW: deterministic, citation-derived bullets
         "escalation_note": escalation_note,    # NEW: deterministic rule for High urgency (else None)
