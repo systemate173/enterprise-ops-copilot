@@ -48,7 +48,7 @@ def test_summarize_sets_blocker_reason_when_not_ready():
         "category": "Operations",
         "urgency": "Medium",
         "impact": "Shipping delayed",
-        "recommended_runbooks": ["RBK-OPS-WMS-060"],
+        "recommended_runbooks": [],
         "citations": [],  # <- key condition
     }
 
@@ -56,3 +56,4 @@ def test_summarize_sets_blocker_reason_when_not_ready():
     assert s["ready"] is False
     assert s["blocker_reason"] == "no_citations"
     assert s["highlights"] == []
+    assert s["sources"] == []
