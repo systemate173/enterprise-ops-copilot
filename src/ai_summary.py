@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from email.mime import text
 import json
 import os
 import re
@@ -39,21 +40,14 @@ def _build_prompt(det_summary: Dict[str, Any]) -> str:
 
 
 def _ollama_generate(prompt: str) -> str:
-    """
-    Calls the local Ollama HTTP API.
-    Tuned for stable, non-rambling, low-hallucination outputs.
-    """
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {
-            # Lower temperature reduces creative drift (good for ops summaries)
             "temperature": 0.2,
             "top_p": 0.9,
-            # Reduce repetition loops
             "repeat_penalty": 1.15,
-            # Keep it short (1–2 sentences)
             "num_predict": 120,
         },
     }
@@ -68,12 +62,10 @@ def _ollama_generate(prompt: str) -> str:
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to call Ollama. Make sure `ollama serve` is running and the model is pulled."
-        ) from e
-
-    return (data.get("response") or "").strip()
+        return (data.get("response") or "").strip()
+    except Exception:
+        # IMPORTANT: don't crash the app/demo if Ollama isn't running
+        return ""
 
 
 def _postprocess(text: str, sources: List[str]) -> str:
@@ -111,6 +103,14 @@ def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
     prompt = _build_prompt(det_summary)
     raw = _ollama_generate(prompt)
     cleaned = _postprocess(raw, sources)
+    
+    text = _ollama_generate(prompt)
+    if not text:
+        return {
+            "ai_summary": None,
+            "used_sources": sources,
+            "refusal": "AI unavailable: Ollama is not reachable. Start it with `ollama serve`.",
+        }
 
     return {
         "ai_summary": cleaned,

@@ -6,6 +6,8 @@ from pathlib import Path
 from src.triage import triage_incident
 from src.retrieve import retrieve_runbooks
 from src.summarize import summarize_ticket
+from src.ai_summary import ai_manager_summary
+
 
 
 
@@ -35,6 +37,8 @@ def _print_ticket(ticket: dict) -> None:
     summary = summarize_ticket(ticket)
     print("\n--- MANAGER SUMMARY (DETERMINISTIC) ---")
     print(json.dumps(summary, indent=2))
+    print("\n--- MANAGER SUMMARY (AI, CITATION-LOCKED) ---")
+    print(ai_manager_summary(summary))
 
 
 def _load_example_files() -> list[Path]:
