@@ -1,6 +1,5 @@
-from __future__ import annotations
 
-from email.mime import text
+from __future__ import annotations
 import json
 import os
 import re
@@ -83,13 +82,7 @@ def _postprocess(text: str, sources: List[str]) -> str:
             text = f"{text} Sources: (none)"
     return text
 
-
 def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Citation-locked AI summary.
-    - Refuses if not ready (no sources).
-    - Otherwise generates a short manager update, grounded in sources/highlights.
-    """
     ready = bool(det_summary.get("ready", False))
     sources = det_summary.get("sources", []) or []
 
@@ -101,10 +94,8 @@ def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     prompt = _build_prompt(det_summary)
-    raw = _ollama_generate(prompt)
-    cleaned = _postprocess(raw, sources)
-    
     text = _ollama_generate(prompt)
+
     if not text:
         return {
             "ai_summary": None,
@@ -112,8 +103,11 @@ def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
             "refusal": "AI unavailable: Ollama is not reachable. Start it with `ollama serve`.",
         }
 
+    cleaned = _postprocess(text, sources)
+
     return {
         "ai_summary": cleaned,
         "used_sources": sources,
         "refusal": None,
     }
+
