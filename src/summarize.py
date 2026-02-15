@@ -16,6 +16,7 @@ HIGHLIGHT_SECTIONS = [
 ]
 
 
+
 def _clean_label(value: Any) -> str:
     """
     Turn Enum-like values into clean display strings.
@@ -156,6 +157,25 @@ def _highlights_from_citations(citations: List[Dict[str, Any]], max_total: int =
 
     return highlights
 
+def _escalation_from_citations(citations: List[Dict[str, Any]], max_total: int = 2) -> List[str]:
+    targets: List[str] = []
+    seen = set()
+
+    for c in citations or []:
+        excerpt = (c.get("excerpt") or "").strip()
+        if not excerpt:
+            continue
+        block = _extract_section_block(excerpt, "Escalation")
+        for b in _extract_bullets(block, max_items=max_total):
+            k = b.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            targets.append(b)
+            if len(targets) >= max_total:
+                return targets
+    return targets
+
 
 def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -182,6 +202,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     highlights: List[str] = _highlights_from_citations(citations, max_total=4) if ready else []
 
     # Escalation note: deterministic rule on urgency
+    escalation_targets = _escalation_from_citations(citations, max_total=2) if ready else []
     escalation_note = None
     if urgency.lower() == "high":
         escalation_note = (
@@ -207,6 +228,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
         "summary": summary,
         "highlights": highlights,              # NEW: deterministic, citation-derived bullets
         "escalation_note": escalation_note,    # NEW: deterministic rule for High urgency (else None)
+        "escalation_targets": escalation_targets,
         "key_details": {
             "ticket_id": ticket.get("ticket_id"),
             "category": category,

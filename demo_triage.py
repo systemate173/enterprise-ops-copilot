@@ -37,8 +37,10 @@ def _print_ticket(ticket: dict) -> None:
     summary = summarize_ticket(ticket)
     print("\n--- MANAGER SUMMARY (DETERMINISTIC) ---")
     print(json.dumps(summary, indent=2))
-    print("\n--- MANAGER SUMMARY (AI, CITATION-LOCKED) ---")
-    print(ai_manager_summary(summary))
+    print("\n--- MANAGER REPORT (AI, VALIDATED JSON) ---")
+    ai = ai_manager_summary(summary)
+    print(json.dumps(ai, indent=2))
+
 
 
 def _load_example_files() -> list[Path]:
