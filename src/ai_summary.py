@@ -23,6 +23,18 @@ REPORT_KEYS = [
     "sources",
 ]
 
+def _normalize_plan(value: Any) -> Dict[str, List[str]]:
+    empty = {"now": [], "next": [], "if_unresolved": []}
+    if not isinstance(value, dict):
+        return empty
+
+    return {
+        "now": _normalize_list(value.get("now"), max_items=5),
+        "next": _normalize_list(value.get("next"), max_items=5),
+        "if_unresolved": _normalize_list(value.get("if_unresolved"), max_items=5),
+    }
+
+
 
 def _build_prompt(det: Dict[str, Any]) -> str:
     summary = (det.get("summary") or "").strip()
@@ -38,16 +50,21 @@ def _build_prompt(det: Dict[str, Any]) -> str:
     srcs = ", ".join(sources) if sources else "(none)"
 
     schema = (
-        "{\n"
-        '  "executive_update": string,\n'
-        '  "what_we_know": [string, ...],\n'
-        '  "what_we_dont_know": [string, ...],\n'
-        '  "most_likely_causes": [string, ...],\n'
-        '  "recommended_plan": [string, ...],\n'
-        '  "escalation": string,\n'
-        '  "sources": [string, ...]\n'
-        "}"
-    )
+    "{\n"
+    '  "executive_update": string,\n'
+    '  "what_we_know": [string, ...],\n'
+    '  "what_we_dont_know": [string, ...],\n'
+    '  "most_likely_causes": [string, ...],\n'
+    '  "recommended_plan": {\n'
+    '    "now": [string, ...],\n'
+    '    "next": [string, ...],\n'
+    '    "if_unresolved": [string, ...]\n'
+    "  },\n"
+    '  "escalation": string,\n'
+    '  "sources": [string, ...]\n'
+    "}"
+)
+
 
     return (
         "You are a senior incident commander writing a reliable, business-useful incident report.\n\n"
@@ -71,10 +88,10 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         "- what_we_know: 3–6 bullets derived from summary/highlights.\n"
         "- what_we_dont_know: 2–5 bullets derived from open questions.\n"
         "- most_likely_causes: ONLY if explicitly supported; otherwise ['Unknown'].\n"
-        "- recommended_plan: Write a short plan with labels like 'Now:', 'Next:', 'If unresolved:' using provided actions/highlights.\n"
+        "- recommended_plan MUST be an object with keys now/next/if_unresolved, each a list of strings.\n"
         "- escalation: If escalation targets exist, name them; otherwise 'Unknown'.\n"
+        "- When unsure, say 'suspected' or 'possibly' instead of stating as fact.\n"
     )
-
 
 def _ollama_generate(prompt: str) -> str:
     """
@@ -180,7 +197,11 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
     if any("likely" in x.lower() for x in mlc):
         mlc = ["Unknown"]
     cleaned["most_likely_causes"] = mlc
-    cleaned["recommended_plan"] = _normalize_list(report.get("recommended_plan"), max_items=7) or ["Unknown"]
+    plan = _normalize_plan(report.get("recommended_plan"))
+    if not (plan["now"] or plan["next"] or plan["if_unresolved"]):
+        plan = {"now": ["Unknown"], "next": ["Unknown"], "if_unresolved": ["Unknown"]}
+    cleaned["recommended_plan"] = plan
+
 
     # Force sources
     cleaned["sources"] = sources

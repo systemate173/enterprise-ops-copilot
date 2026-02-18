@@ -88,6 +88,43 @@ CATEGORY_RULES: List[Tuple[Category, List[str], List[str]]] = [
 URGENCY_HIGH = ["outage", "down", "unable", "cannot", "can't", "sev1", "critical", "p0", "blocker"]
 URGENCY_MED = ["slow", "intermittent", "sometimes", "degraded", "latency", "flaky"]
 
+PERF_KEYWORDS = [
+    "slow", "slowness", "latency", "high latency", "degraded", "degradation",
+    "timeout", "timed out", "time out",
+    "load time", "page load", "pages load", "loading", "takes", "seconds",
+    "response time", "5 seconds", "10 seconds",
+    "db latency", "database latency", "query", "queries", "slow query",
+    "cpu", "memory", "high load", "server load", "spike",
+    "500", "502", "503", "504", "gateway timeout"
+]
+
+def _detect_performance(raw: str) -> List[str]:
+    """
+    Detect performance degradation indicators.
+    Returns list of matched indicators (may include simple numeric patterns).
+    """
+    t = raw.lower()
+    hits = []
+
+    # Keyword hits
+    hits.extend([k for k in PERF_KEYWORDS if k in t])
+
+    # Simple pattern: "X seconds" (captures "5 seconds", "10 seconds", etc.)
+    # Keep deterministic / lightweight: just check a few common forms
+    for n in ["2", "3", "4", "5", "6", "7", "8", "9", "10", "15", "20", "30"]:
+        if f"{n} second" in t or f"{n}s" in t:
+            hits.append(f"{n}s")
+
+    # De-dup while preserving order
+    seen = set()
+    ordered = []
+    for h in hits:
+        if h not in seen:
+            seen.add(h)
+            ordered.append(h)
+    return ordered
+
+
 IMPACT_BROAD = ["multiple teams", "all users", "everyone", "company-wide", "entire org"]
 IMPACT_CUSTOMER = ["customer", "customers", "clients", "buyers", "users affected"]
 
@@ -226,6 +263,28 @@ def triage_incident(text: str) -> Dict[str, Any]:
     category, cat_matches, suspected, cat_conf, cat_reason = _classify_category(raw)
     matched_keywords["category"] = cat_matches
     reasoning.extend(cat_reason)
+    
+        # --- Priority override: performance degradation should route to Engineering ---
+    perf_hits = _detect_performance(raw)
+
+    # Require at least 2 perf indicators OR 1 strong indicator + "checkout/payment" presence
+    strong_perf = any(h in perf_hits for h in ["latency", "timeout", "timed out", "degraded", "db latency", "504", "503"])
+    has_payments_words = bool(_contains_any(raw, ["checkout", "payment", "refund", "billing"]))
+
+    if len(perf_hits) >= 2 or (strong_perf and has_payments_words):
+        # Override only if we were about to route to Customer Support or General Ops
+        if category in (Category.CUSTOMER_SUPPORT, Category.GENERAL_OPS):
+            category = Category.ENGINEERING
+            matched_keywords["performance"] = perf_hits
+            reasoning.append(f"Performance degradation indicators found ({perf_hits}); overriding category to Engineering.")
+
+            # Merge suspected systems
+            # Keep existing suspected + add Performance marker
+            if "Performance" not in suspected:
+                suspected = (suspected or []) + ["Performance"]
+
+            # Lift confidence floor a bit since perf evidence is strong
+            cat_conf = max(cat_conf, 0.70)
 
     urgency, urg_matches, urg_conf, urg_reason = _classify_urgency(raw)
     matched_keywords["urgency"] = urg_matches
@@ -258,11 +317,15 @@ def triage_incident(text: str) -> Dict[str, Any]:
     # RAG hooks: suggest runbook types (IDs/names), but don't invent content
     recommended_runbooks = []
     if category == Category.IT_OPS and "Authentication" in suspected:
-        recommended_runbooks = ["RBK-IT-AUTH-001", "RBK-IT-SSO-002"]
+        recommended_runbooks = ["RBK-IT-AUTH-001"]
     elif category == Category.CUSTOMER_SUPPORT:
         recommended_runbooks = ["RBK-CS-PAYMENTS-010"]
     elif category == Category.ENGINEERING:
-        recommended_runbooks = ["RBK-ENG-CICD-101"]
+        # If performance signals were detected, prefer performance runbook
+        if "performance" in matched_keywords:
+            recommended_runbooks = ["RBK-ENG-PERF-120"]
+        else:
+            recommended_runbooks = ["RBK-ENG-CICD-101"]
     elif category == Category.OPERATIONS:
     # Distinguish inventory sync issues vs warehouse system outages
         wms_indicators = ["label", "printer", "print", "wms", "warehouse system", "packing", "shipping"]
