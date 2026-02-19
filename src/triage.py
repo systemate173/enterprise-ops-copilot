@@ -10,6 +10,7 @@ Purpose:
 
 from __future__ import annotations
 
+from curses import raw
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Any
@@ -77,6 +78,22 @@ def _contains_any(text: str, keywords: List[str]) -> List[str]:
     t = text.lower()
     return [k for k in keywords if k in t]
 
+def _is_negated(text: str, keyword: str) -> bool:
+    """
+    Very small deterministic negation check for common patterns like:
+    'no outage', 'no outages', 'not down', 'without outage'
+    """
+    t = text.lower()
+    patterns = [
+        f"no {keyword}",
+        f"no {keyword}s",
+        f"not {keyword}",
+        f"without {keyword}",
+        f"no {keyword} reported",
+        f"no {keyword}s reported",
+    ]
+    return any(p in t for p in patterns)
+
 CATEGORY_RULES: List[Tuple[Category, List[str], List[str]]] = [
     # (category, keywords, suspected_systems)
     (Category.IT_OPS, ["login", "auth", "authentication", "sso", "password", "token", "vpn", "dns"], ["Authentication"]),
@@ -91,7 +108,7 @@ URGENCY_MED = ["slow", "intermittent", "sometimes", "degraded", "latency", "flak
 PERF_KEYWORDS = [
     "slow", "slowness", "latency", "high latency", "degraded", "degradation",
     "timeout", "timed out", "time out",
-    "load time", "page load", "pages load", "loading", "takes", "seconds",
+    "load time", "page load", "pages load", "loading", "seconds",
     "response time", "5 seconds", "10 seconds",
     "db latency", "database latency", "query", "queries", "slow query",
     "cpu", "memory", "high load", "server load", "spike",
@@ -193,14 +210,14 @@ def _classify_category(raw: str) -> Tuple[Category, List[str], List[str], float,
 
     return best_category, best_matches, best_suspected, conf, reasoning
 
-
 def _classify_urgency(raw: str) -> Tuple[Urgency, List[str], float, List[str]]:
-    matched_high = _contains_any(raw, URGENCY_HIGH)
-    matched_med = _contains_any(raw, URGENCY_MED)
-
     reasoning: List[str] = []
 
-    # Prefer high if any high indicators
+    # Only count HIGH matches that are not negated
+    raw_low = raw.lower()
+    matched_high = [k for k in URGENCY_HIGH if (k in raw_low and not _is_negated(raw, k))]
+    matched_med = [k for k in URGENCY_MED if (k in raw_low and not _is_negated(raw, k))]
+
     if matched_high:
         reasoning.append(f"Urgency set to High due to indicators: {matched_high}.")
         return Urgency.HIGH, matched_high, 0.80, reasoning
@@ -209,10 +226,8 @@ def _classify_urgency(raw: str) -> Tuple[Urgency, List[str], float, List[str]]:
         reasoning.append(f"Urgency set to Medium due to indicators: {matched_med}.")
         return Urgency.MEDIUM, matched_med, 0.65, reasoning
 
-    # If no indicators, be conservative but not alarmist
     reasoning.append("No urgency indicators found; set to Low.")
     return Urgency.LOW, [], 0.55, reasoning
-
 
 def _infer_impact(raw: str) -> Tuple[str, List[str], List[str]]:
     broad = _contains_any(raw, IMPACT_BROAD)
@@ -264,24 +279,26 @@ def triage_incident(text: str) -> Dict[str, Any]:
     matched_keywords["category"] = cat_matches
     reasoning.extend(cat_reason)
     
-        # --- Priority override: performance degradation should route to Engineering ---
+    # --- Priority override: performance degradation should route to Engineering ---
     perf_hits = _detect_performance(raw)
 
-    # Require at least 2 perf indicators OR 1 strong indicator + "checkout/payment" presence
+    # Require perf evidence anchored by strong indicators to avoid false positives
+    anchors = {"latency", "degraded", "timeout", "timed out", "db latency", "server load", "503", "504", "gateway timeout"}
+    has_anchor = any(h in anchors for h in perf_hits)
+
     strong_perf = any(h in perf_hits for h in ["latency", "timeout", "timed out", "degraded", "db latency", "504", "503"])
     has_payments_words = bool(_contains_any(raw, ["checkout", "payment", "refund", "billing"]))
 
-    if len(perf_hits) >= 2 or (strong_perf and has_payments_words):
+    # Override when we have multiple perf signals AND at least one anchor,
+    # or when a strong perf signal appears alongside payments words (classic "slow checkout" scenario).
+    if (len(perf_hits) >= 2 and has_anchor) or (strong_perf and has_payments_words):
         # Override only if we were about to route to Customer Support or General Ops
         if category in (Category.CUSTOMER_SUPPORT, Category.GENERAL_OPS):
             category = Category.ENGINEERING
             matched_keywords["performance"] = perf_hits
             reasoning.append(f"Performance degradation indicators found ({perf_hits}); overriding category to Engineering.")
 
-            # Merge suspected systems
-            # Keep existing suspected + add Performance marker
-            if "Performance" not in suspected:
-                suspected = (suspected or []) + ["Performance"]
+            suspected = ["Performance"] + (["CI/CD"] if _contains_any(raw, ["deploy", "release", "rollback", "ci", "pipeline"]) else [])
 
             # Lift confidence floor a bit since perf evidence is strong
             cat_conf = max(cat_conf, 0.70)
@@ -327,7 +344,7 @@ def triage_incident(text: str) -> Dict[str, Any]:
         else:
             recommended_runbooks = ["RBK-ENG-CICD-101"]
     elif category == Category.OPERATIONS:
-    # Distinguish inventory sync issues vs warehouse system outages
+        # Distinguish inventory sync issues vs warehouse system outages
         wms_indicators = ["label", "printer", "print", "wms", "warehouse system", "packing", "shipping"]
         if _contains_any(raw, wms_indicators):
             recommended_runbooks = ["RBK-OPS-WMS-060"]
