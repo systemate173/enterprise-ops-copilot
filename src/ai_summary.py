@@ -124,9 +124,9 @@ def _ollama_generate(prompt: str) -> str:
     "model": OLLAMA_MODEL,
     "prompt": prompt,
     "stream": False,
-    "format": REPORT_SCHEMA, 
+    "format": "json",  # keep simple JSON mode (schema optional for now)
     "options": {
-        "temperature": 0.0,    
+        "temperature": 0.0,   # CRITICAL: deterministic output
         "top_p": 1.0,
         "repeat_penalty": 1.1,
         "num_predict": 350,
