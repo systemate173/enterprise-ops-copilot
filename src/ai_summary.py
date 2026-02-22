@@ -23,6 +23,31 @@ REPORT_KEYS = [
     "sources",
 ]
 
+# Strict schema for Ollama structured outputs
+REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "executive_update": {"type": "string"},
+        "what_we_know": {"type": "array", "items": {"type": "string"}},
+        "what_we_dont_know": {"type": "array", "items": {"type": "string"}},
+        "most_likely_causes": {"type": "array", "items": {"type": "string"}},
+        "recommended_plan": {
+            "type": "object",
+            "properties": {
+                "now": {"type": "array", "items": {"type": "string"}},
+                "next": {"type": "array", "items": {"type": "string"}},
+                "if_unresolved": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["now", "next", "if_unresolved"],
+            "additionalProperties": False,
+        },
+        "escalation": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": REPORT_KEYS,
+    "additionalProperties": False,
+}
+
 def _normalize_plan(value: Any) -> Dict[str, List[str]]:
     empty = {"now": [], "next": [], "if_unresolved": []}
     if not isinstance(value, dict):
@@ -33,8 +58,6 @@ def _normalize_plan(value: Any) -> Dict[str, List[str]]:
         "next": _normalize_list(value.get("next"), max_items=5),
         "if_unresolved": _normalize_list(value.get("if_unresolved"), max_items=5),
     }
-
-
 
 def _build_prompt(det: Dict[str, Any]) -> str:
     summary = (det.get("summary") or "").strip()
@@ -98,14 +121,15 @@ def _ollama_generate(prompt: str) -> str:
     Call local Ollama. Tuned for low-hallucination structured output.
     """
     payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.1,      # lower = less creative drift
-            "top_p": 0.9,
-            "repeat_penalty": 1.15,
-            "num_predict": 220,      # enough to fit JSON fields, still bounded
+    "model": OLLAMA_MODEL,
+    "prompt": prompt,
+    "stream": False,
+    "format": REPORT_SCHEMA, 
+    "options": {
+        "temperature": 0.0,    
+        "top_p": 1.0,
+        "repeat_penalty": 1.1,
+        "num_predict": 350,
         },
     }
 
@@ -124,34 +148,39 @@ def _ollama_generate(prompt: str) -> str:
         # Do not crash the app if Ollama is down
         return ""
 
-
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """
-    Extract the first JSON object from the model output and parse it.
-    We also tolerate accidental wrapping text by searching for a {...} block.
-    """
     if not text:
         return None
 
+    s = text.strip()
+
     # Try direct parse first
     try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
     except Exception:
         pass
 
-    # Fallback: find first JSON object region
-    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not m:
+    # Balanced-brace extraction: find first JSON object
+    start = s.find("{")
+    if start == -1:
         return None
 
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
-
+    depth = 0
+    for i in range(start, len(s)):
+        ch = s[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = s[start:i + 1]
+                try:
+                    obj = json.loads(candidate)
+                    return obj if isinstance(obj, dict) else None
+                except Exception:
+                    return None
+    return None
 
 def _normalize_list(value: Any, max_items: int = 5) -> List[str]:
     """
