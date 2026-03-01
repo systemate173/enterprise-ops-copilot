@@ -145,6 +145,7 @@ def _normalize_hypotheses(value: Any, max_items: int = 4) -> List[Dict[str, str]
 def _build_prompt(det: Dict[str, Any]) -> str:
     summary = (det.get("summary") or "").strip()
     highlights = det.get("highlights", []) or []
+    incident_facts = det.get("incident_facts", []) or []
     actions = det.get("recommended_actions", []) or []
     questions = det.get("questions_to_answer", []) or []
     escalation_targets = det.get("escalation_targets", []) or []
@@ -191,11 +192,13 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         f"- Deterministic summary: {summary}\n"
         f"- Runbook highlights:\n{bullets(highlights)}\n"
         f"- Recommended actions:\n{bullets(actions)}\n"
+        f"- Incident facts:\n{bullets(incident_facts)}\n"
         f"- Open questions:\n{bullets(questions)}\n"
         f"- Escalation targets (from runbooks):\n{bullets(escalation_targets)}\n"
         f"- Sources: {srcs}\n\n"
         "Guidance:\n"
         "- Avoid repeating the deterministic summary verbatim; rephrase into clear business language.\n"
+        "- recommended_plan.if_unresolved should be escalation or deeper investigation steps (not normal mitigation steps).\n"
         "- executive_update: 1–2 sentences for leadership.\n"
         "- what_we_know: 3–6 bullets derived from summary/highlights.\n"
         "- what_we_dont_know: 2–5 bullets derived from open questions.\n"
@@ -257,12 +260,24 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
 
     cleaned: Dict[str, Any] = {}
 
+    # ---- strings ----
     cleaned["executive_update"] = str(report.get("executive_update") or "Unknown").strip() or "Unknown"
-    cleaned["escalation"] = str(report.get("escalation") or "Unknown").strip() or "Unknown"
 
+    cleaned["escalation"] = str(report.get("escalation") or "Unknown").strip() or "Unknown"
+    # Make escalation look clean (not a full runbook sentence)
+    esc = cleaned["escalation"]
+    esc_low = esc.lower()
+    if esc_low.startswith("escalate to "):
+        esc = esc[len("escalate to "):].strip()
+    if " if " in esc.lower():
+        esc = esc.split(" if ", 1)[0].strip()
+    cleaned["escalation"] = esc or "Unknown"
+
+    # ---- lists ----
     cleaned["what_we_know"] = _normalize_list(report.get("what_we_know"), max_items=6) or ["Unknown"]
     cleaned["what_we_dont_know"] = _normalize_list(report.get("what_we_dont_know"), max_items=5) or ["Unknown"]
 
+    # ---- hypotheses ----
     hyps = _normalize_hypotheses(report.get("hypotheses"), max_items=4)
     cleaned["hypotheses"] = hyps or [
         {
@@ -273,12 +288,45 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
         }
     ]
 
+    # ---- plan ----
     plan = _normalize_plan(report.get("recommended_plan"))
+
+    # Optional safety check (stronger):
+    # Keep "if_unresolved" for escalation/deeper investigation, not normal mitigation.
+    def looks_like_mitigation(line: str) -> bool:
+        l = (line or "").lower()
+        return any(k in l for k in ["roll back", "rollback", "retry", "disable", "restart", "clear cache"])
+
+    moved: List[str] = []
+    kept: List[str] = []
+    for x in plan.get("if_unresolved", []):
+        if looks_like_mitigation(x):
+            moved.append(x)
+        else:
+            kept.append(x)
+
+    plan["if_unresolved"] = kept
+
+    # Move mitigation-ish lines into "next" instead
+    for x in moved:
+        if x not in plan["next"]:
+            plan["next"].append(x)
+
+    # If if_unresolved is empty after filtering, put a sane default
+    if not plan["if_unresolved"]:
+        # Prefer using the cleaned escalation target if it exists
+        if cleaned["escalation"] != "Unknown":
+            plan["if_unresolved"] = [f"Escalate to {cleaned['escalation']}."]
+        else:
+            plan["if_unresolved"] = ["Escalate to the appropriate on-call/owner and continue deeper investigation."]
+
+    # If the whole plan is empty somehow, hard fallback
     if not (plan["now"] or plan["next"] or plan["if_unresolved"]):
         plan = {"now": ["Unknown"], "next": ["Unknown"], "if_unresolved": ["Unknown"]}
+
     cleaned["recommended_plan"] = plan
 
-    # Force sources to deterministic sources
+    # ---- sources ----
     cleaned["sources"] = sources
 
     return cleaned

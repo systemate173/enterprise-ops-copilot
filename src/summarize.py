@@ -88,6 +88,17 @@ def _extract_section_block(md: str, heading: str) -> str:
 
     return "\n".join(out).strip()
 
+def _extract_incident_facts(description: str, max_items: int = 5) -> List[str]:
+    """
+    Deterministically extract a few high-signal facts from the incident description.
+    Keeps it simple: first non-empty lines, trimmed.
+    """
+    if not description:
+        return []
+    lines = [ln.strip() for ln in description.splitlines() if ln.strip()]
+    # Return first N lines (stable + predictable)
+    return lines[:max_items]
+
 
 def _extract_bullets(text: str, max_items: int = 4) -> List[str]:
     """
@@ -221,11 +232,13 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     actions = ticket.get("next_actions", []) or []
     questions = ticket.get("missing_info_questions", []) or []
+    incident_facts = _extract_incident_facts(ticket.get("description", ""), max_items=5)
 
     return {
         "ready": ready,
         "blocker_reason": blocker_reason,
         "summary": summary,
+        "incident_facts": incident_facts,
         "highlights": highlights,              # NEW: deterministic, citation-derived bullets
         "escalation_note": escalation_note,    # NEW: deterministic rule for High urgency (else None)
         "escalation_targets": escalation_targets,
