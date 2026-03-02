@@ -10,6 +10,39 @@ from typing import Any, Dict, List, Optional
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:instruct")
 
+# --- "Company knowledge" (v1) ---
+# Deterministic team directory / escalation options.
+# This is the simplest form of RAG: you control what "the company knows".
+
+ESCALATION_ALLOWLIST_BY_CATEGORY = {
+    "IT Ops": ["IT Ops On-Call", "IAM/Security", "Network"],
+    "Engineering": ["Platform", "SRE", "Mobile", "Frontend"],
+    "Customer Support": ["Customer Support Lead", "Payments Engineering", "Finance"],
+    "Operations": ["Warehouse Ops", "Logistics Ops", "Operations Lead"],
+    "General Ops": ["IT Ops On-Call", "Operations Lead", "Engineering On-Call"],
+}
+
+ESCALATION_ALLOWLIST_BY_SYSTEM = {
+    "Authentication": ["IAM/Security", "IT Ops On-Call"],
+    "CI/CD": ["Platform", "SRE"],
+    "Payments/Billing": ["Payments Engineering", "Finance"],
+    "Performance": ["SRE", "Platform"],
+    "Logistics": ["Logistics Ops", "Warehouse Ops"],
+}
+
+def _allowed_escalation_teams(det: Dict[str, Any]) -> List[str]:
+    key = det.get("key_details") or {}
+    category = str(key.get("category") or "General Ops")
+    systems = key.get("suspected_systems") or []
+
+    allowed = set(ESCALATION_ALLOWLIST_BY_CATEGORY.get(category, []))
+    for s in systems:
+        for team in ESCALATION_ALLOWLIST_BY_SYSTEM.get(str(s), []):
+            allowed.add(team)
+
+    # Safe fallback (never empty)
+    out = sorted(allowed) if allowed else ["IT Ops On-Call", "Engineering On-Call", "Operations Lead"]
+    return out
 
 # JSON keys we require from the model
 REPORT_KEYS = [
@@ -149,6 +182,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
     actions = det.get("recommended_actions", []) or []
     questions = det.get("questions_to_answer", []) or []
     escalation_targets = det.get("escalation_targets", []) or []
+    allowed_teams = _allowed_escalation_teams(det)
     sources = det.get("sources", []) or []
 
     def bullets(items: List[str]) -> str:
@@ -195,6 +229,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         f"- Incident facts:\n{bullets(incident_facts)}\n"
         f"- Open questions:\n{bullets(questions)}\n"
         f"- Escalation targets (from runbooks):\n{bullets(escalation_targets)}\n"
+        f"- Allowed escalation teams (choose from this list ONLY): {', '.join(allowed_teams)}\n"
         f"- Sources: {srcs}\n\n"
         "Guidance:\n"
         "- Avoid repeating the deterministic summary verbatim; rephrase into clear business language.\n"
@@ -202,6 +237,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         "- executive_update: 1–2 sentences for leadership.\n"
         "- what_we_know: 3–6 bullets derived from summary/highlights.\n"
         "- what_we_dont_know: 2–5 bullets derived from open questions.\n"
+        "- Escalation must choose from allowed teams; do not output Unknown.\n"
         "- hypotheses: Provide 2–4 plausible hypotheses (NOT facts) consistent with Allowed Facts.\n"
         "- Each hypothesis MUST include why it fits the facts and how to validate it.\n"
         "- Use cautious language (e.g., 'Possibly', 'Could be', 'Suspected') and NEVER state a root cause as confirmed.\n"
