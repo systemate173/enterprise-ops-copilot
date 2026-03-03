@@ -2,47 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.request
 from typing import Any, Dict, List, Optional
+
+from src.company_retrieve import retrieve_company_docs
 
 
 # Ollama local server + model
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:instruct")
 
-# --- "Company knowledge" (v1) ---
-# Deterministic team directory / escalation options.
-# This is the simplest form of RAG: you control what "the company knows".
-
-ESCALATION_ALLOWLIST_BY_CATEGORY = {
-    "IT Ops": ["IT Ops On-Call", "IAM/Security", "Network"],
-    "Engineering": ["Platform", "SRE", "Mobile", "Frontend"],
-    "Customer Support": ["Customer Support Lead", "Payments Engineering", "Finance"],
-    "Operations": ["Warehouse Ops", "Logistics Ops", "Operations Lead"],
-    "General Ops": ["IT Ops On-Call", "Operations Lead", "Engineering On-Call"],
-}
-
-ESCALATION_ALLOWLIST_BY_SYSTEM = {
-    "Authentication": ["IAM/Security", "IT Ops On-Call"],
-    "CI/CD": ["Platform", "SRE"],
-    "Payments/Billing": ["Payments Engineering", "Finance"],
-    "Performance": ["SRE", "Platform"],
-    "Logistics": ["Logistics Ops", "Warehouse Ops"],
-}
-
-def _allowed_escalation_teams(det: Dict[str, Any]) -> List[str]:
-    key = det.get("key_details") or {}
-    category = str(key.get("category") or "General Ops")
-    systems = key.get("suspected_systems") or []
-
-    allowed = set(ESCALATION_ALLOWLIST_BY_CATEGORY.get(category, []))
-    for s in systems:
-        for team in ESCALATION_ALLOWLIST_BY_SYSTEM.get(str(s), []):
-            allowed.add(team)
-
-    # Safe fallback (never empty)
-    out = sorted(allowed) if allowed else ["IT Ops On-Call", "Engineering On-Call", "Operations Lead"]
-    return out
 
 # JSON keys we require from the model
 REPORT_KEYS = [
@@ -86,7 +56,7 @@ REPORT_SCHEMA = {
             "required": ["now", "next", "if_unresolved"],
             "additionalProperties": False,
         },
-        "escalation": {"type": "string"},
+        "escalation": {"type": "string"},  # MUST be a TEAM name, not a sentence
         "sources": {"type": "array", "items": {"type": "string"}},
     },
     "required": REPORT_KEYS,
@@ -94,7 +64,25 @@ REPORT_SCHEMA = {
 }
 
 
-def _normalize_list(value: Any, max_items: int = 5) -> List[str]:
+# --- "Company knowledge" allowlists (deterministic) ---
+ESCALATION_ALLOWLIST_BY_CATEGORY = {
+    "IT Ops": ["IT Ops On-Call", "IAM/Security", "Network"],
+    "Engineering": ["Platform", "SRE", "Mobile", "Frontend"],
+    "Customer Support": ["Customer Support Lead", "Payments Engineering", "Finance"],
+    "Operations": ["Warehouse Ops", "Logistics Ops", "Operations Lead"],
+    "General Ops": ["IT Ops On-Call", "Operations Lead", "Engineering On-Call"],
+}
+
+ESCALATION_ALLOWLIST_BY_SYSTEM = {
+    "Authentication": ["IAM/Security", "IT Ops On-Call"],
+    "CI/CD": ["Platform", "SRE"],
+    "Payments/Billing": ["Payments Engineering", "Finance"],
+    "Performance": ["SRE", "Platform"],
+    "Logistics": ["Logistics Ops", "Warehouse Ops"],
+}
+
+
+def _normalize_list(value: Any, max_items: int = 6) -> List[str]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -117,7 +105,6 @@ def _normalize_plan(value: Any) -> Dict[str, List[str]]:
     empty = {"now": [], "next": [], "if_unresolved": []}
     if not isinstance(value, dict):
         return empty
-
     return {
         "now": _normalize_list(value.get("now"), max_items=5),
         "next": _normalize_list(value.get("next"), max_items=5),
@@ -132,24 +119,23 @@ def _normalize_hypotheses(value: Any, max_items: int = 4) -> List[Dict[str, str]
     out: List[Dict[str, str]] = []
     allowed_conf = {"Low", "Medium", "High"}
 
-    overconfident = ["definitely", "confirmed", "root cause is", "caused by"]
-
     def trim(s: str, n: int = 240) -> str:
-        s = (s or "").strip()
+        s = s.strip()
         return s if len(s) <= n else s[: n - 3].rstrip() + "..."
 
     for item in value:
         if not isinstance(item, dict):
             continue
 
-        hyp = trim(str(item.get("hypothesis") or ""))
-        why = trim(str(item.get("why") or ""))
-        validate = trim(str(item.get("how_to_validate") or ""))
+        hyp = str(item.get("hypothesis") or "").strip()
+        why = str(item.get("why") or "").strip()
+        validate = str(item.get("how_to_validate") or "").strip()
         conf = str(item.get("confidence") or "").strip()
 
         if conf not in allowed_conf:
             conf = "Low"
 
+        overconfident = ["definitely", "confirmed", "root cause is", "caused by"]
         combined = f"{hyp} {why} {validate}".lower()
         if any(w in combined for w in overconfident):
             hyp = "Suspected issue; needs validation"
@@ -162,89 +148,64 @@ def _normalize_hypotheses(value: Any, max_items: int = 4) -> List[Dict[str, str]
 
         out.append(
             {
-                "hypothesis": hyp,
-                "why": why or "Unknown",
-                "how_to_validate": validate,
+                "hypothesis": trim(hyp),
+                "why": trim(why or "Unknown"),
+                "how_to_validate": trim(validate),
                 "confidence": conf,
             }
         )
-
         if len(out) >= max_items:
             break
 
     return out
 
 
-def _build_prompt(det: Dict[str, Any]) -> str:
-    summary = (det.get("summary") or "").strip()
-    highlights = det.get("highlights", []) or []
-    incident_facts = det.get("incident_facts", []) or []
-    actions = det.get("recommended_actions", []) or []
-    questions = det.get("questions_to_answer", []) or []
-    escalation_targets = det.get("escalation_targets", []) or []
-    allowed_teams = _allowed_escalation_teams(det)
-    sources = det.get("sources", []) or []
+def _allowed_escalation_teams(det: Dict[str, Any]) -> List[str]:
+    key = det.get("key_details") or {}
+    category = str(key.get("category") or "General Ops")
+    systems = key.get("suspected_systems") or []
 
-    def bullets(items: List[str]) -> str:
-        return "\n".join([f"- {x}" for x in items]) if items else "- (none)"
+    allowed = set(ESCALATION_ALLOWLIST_BY_CATEGORY.get(category, []))
+    for s in systems:
+        for team in ESCALATION_ALLOWLIST_BY_SYSTEM.get(str(s), []):
+            allowed.add(team)
 
-    srcs = ", ".join(sources) if sources else "(none)"
+    # safe fallback
+    out = sorted(allowed) if allowed else ["IT Ops On-Call", "Engineering On-Call", "Operations Lead"]
+    return out
 
-    schema_hint = (
-        "{\n"
-        '  "executive_update": string,\n'
-        '  "what_we_know": [string, ...],\n'
-        '  "what_we_dont_know": [string, ...],\n'
-        '  "hypotheses": [\n'
-        '    {\n'
-        '      "hypothesis": string,\n'
-        '      "why": string,\n'
-        '      "how_to_validate": string,\n'
-        '      "confidence": "Low" | "Medium" | "High"\n'
-        '    }, ...\n'
-        "  ],\n"
-        '  "recommended_plan": {\n'
-        '    "now": [string, ...],\n'
-        '    "next": [string, ...],\n'
-        '    "if_unresolved": [string, ...]\n'
-        "  },\n"
-        '  "escalation": string,\n'
-        '  "sources": [string, ...]\n'
-        "}"
-    )
 
-    return (
-        "You are a senior incident commander writing a reliable, business-useful incident report.\n\n"
-        "CRITICAL RULES (do not break):\n"
-        "1) Use ONLY the Allowed Facts below.\n"
-        "2) Do NOT invent root cause, metrics, or timelines.\n"
-        "3) If you truly cannot form a plausible hypothesis from the Allowed Facts, use 'Unknown'.\n"
-        "4) Output MUST be valid JSON and MUST match the schema exactly.\n"
-        "5) Do NOT include any text outside the JSON.\n\n"
-        f"Schema:\n{schema_hint}\n\n"
-        "Allowed Facts:\n"
-        f"- Deterministic summary: {summary}\n"
-        f"- Runbook highlights:\n{bullets(highlights)}\n"
-        f"- Recommended actions:\n{bullets(actions)}\n"
-        f"- Incident facts:\n{bullets(incident_facts)}\n"
-        f"- Open questions:\n{bullets(questions)}\n"
-        f"- Escalation targets (from runbooks):\n{bullets(escalation_targets)}\n"
-        f"- Allowed escalation teams (choose from this list ONLY): {', '.join(allowed_teams)}\n"
-        f"- Sources: {srcs}\n\n"
-        "Guidance:\n"
-        "- Avoid repeating the deterministic summary verbatim; rephrase into clear business language.\n"
-        "- recommended_plan.if_unresolved should be escalation or deeper investigation steps (not normal mitigation steps).\n"
-        "- executive_update: 1–2 sentences for leadership.\n"
-        "- what_we_know: 3–6 bullets derived from summary/highlights.\n"
-        "- what_we_dont_know: 2–5 bullets derived from open questions.\n"
-        "- Escalation must choose from allowed teams; do not output Unknown.\n"
-        "- hypotheses: Provide 2–4 plausible hypotheses (NOT facts) consistent with Allowed Facts.\n"
-        "- Each hypothesis MUST include why it fits the facts and how to validate it.\n"
-        "- Use cautious language (e.g., 'Possibly', 'Could be', 'Suspected') and NEVER state a root cause as confirmed.\n"
-        "- confidence must be Low/Medium/High based on strength of the Allowed Facts.\n"
-        "- recommended_plan MUST be an object with keys now/next/if_unresolved, each a list of strings.\n"
-        "- escalation: If escalation targets exist, name them; otherwise 'Unknown'.\n"
-    )
+def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+
+    s = text.strip()
+
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+
+    start = s.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    for i in range(start, len(s)):
+        ch = s[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = s[start : i + 1]
+                try:
+                    obj = json.loads(candidate)
+                    return obj if isinstance(obj, dict) else None
+                except Exception:
+                    return None
+    return None
 
 
 def _ollama_generate(prompt: str) -> str:
@@ -254,10 +215,10 @@ def _ollama_generate(prompt: str) -> str:
         "stream": False,
         "format": REPORT_SCHEMA,
         "options": {
-            "temperature": 0.0,
+            "temperature": 0.0,      # deterministic
             "top_p": 1.0,
             "repeat_penalty": 1.1,
-            "num_predict": 450,
+            "num_predict": 520,      # room for hypotheses objects
         },
     }
 
@@ -276,15 +237,76 @@ def _ollama_generate(prompt: str) -> str:
         return ""
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    if not text:
-        return None
-    s = text.strip()
-    try:
-        obj = json.loads(s)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+def _build_prompt(det: Dict[str, Any]) -> str:
+    summary = (det.get("summary") or "").strip()
+    incident_facts = det.get("incident_facts", []) or []
+    highlights = det.get("highlights", []) or []
+    actions = det.get("recommended_actions", []) or []
+    questions = det.get("questions_to_answer", []) or []
+    sources = det.get("sources", []) or []
+
+    allowed_teams = _allowed_escalation_teams(det)
+
+    # Always include company docs as allowed facts (RAG v1)
+    company_docs = retrieve_company_docs(
+        ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
+        max_chars=900,
+    )
+    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+
+    def bullets(items: List[str]) -> str:
+        return "\n".join([f"- {x}" for x in items]) if items else "- (none)"
+
+    company_context = "\n\n".join(
+        [f"[{d['doc_id']}]\n{d.get('excerpt','')}".strip() for d in company_docs]
+    ).strip() or "(none)"
+
+    schema_text = (
+        "{\n"
+        '  "executive_update": string,\n'
+        '  "what_we_know": [string, ...],\n'
+        '  "what_we_dont_know": [string, ...],\n'
+        '  "hypotheses": [\n'
+        '    {"hypothesis": string, "why": string, "how_to_validate": string, "confidence": "Low|Medium|High"}, ...\n'
+        "  ],\n"
+        '  "recommended_plan": {"now": [string,...], "next": [string,...], "if_unresolved": [string,...]},\n'
+        '  "escalation": string,\n'
+        '  "sources": [string, ...]\n'
+        "}"
+    )
+
+    # Combine sources: deterministic runbooks + company docs
+    all_sources = sources + company_sources
+    srcs = ", ".join(all_sources) if all_sources else "(none)"
+
+    return (
+        "You are a senior incident commander writing a reliable, business-useful incident report.\n\n"
+        "CRITICAL RULES (do not break):\n"
+        "1) Use ONLY the Allowed Facts below.\n"
+        "2) Do NOT invent root cause, metrics, or timelines.\n"
+        "3) Hypotheses are allowed BUT must be clearly labeled as hypotheses and include validation steps.\n"
+        "4) Output MUST be valid JSON and MUST match the schema exactly.\n"
+        "5) Do NOT include any text outside the JSON.\n"
+        "6) escalation MUST be a TEAM NAME chosen from the Allowed escalation teams list.\n\n"
+        f"Schema:\n{schema_text}\n\n"
+        "Allowed Facts:\n"
+        f"- Deterministic summary: {summary}\n"
+        f"- Incident facts:\n{bullets(incident_facts)}\n"
+        f"- Runbook highlights:\n{bullets(highlights)}\n"
+        f"- Recommended actions:\n{bullets(actions)}\n"
+        f"- Open questions:\n{bullets(questions)}\n"
+        f"- Company context:\n{company_context}\n"
+        f"- Allowed escalation teams (choose ONE): {', '.join(allowed_teams)}\n"
+        f"- Sources: {srcs}\n\n"
+        "Guidance:\n"
+        "- executive_update: 1–2 sentences for leadership.\n"
+        "- what_we_know: 3–6 bullets derived from summary/facts/highlights.\n"
+        "- what_we_dont_know: 2–5 bullets derived from open questions or missing context.\n"
+        "- hypotheses: 2–4 plausible hypotheses consistent with Allowed Facts; include validation steps.\n"
+        "- confidence should be Low/Medium/High depending on evidence strength.\n"
+        "- recommended_plan must be grounded in the recommended actions/runbook highlights.\n"
+        "- escalation must be a TEAM NAME only (no sentence).\n"
+    )
 
 
 def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Optional[Dict[str, Any]]:
@@ -296,24 +318,28 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
 
     cleaned: Dict[str, Any] = {}
 
-    # ---- strings ----
     cleaned["executive_update"] = str(report.get("executive_update") or "Unknown").strip() or "Unknown"
 
-    cleaned["escalation"] = str(report.get("escalation") or "Unknown").strip() or "Unknown"
-    # Make escalation look clean (not a full runbook sentence)
-    esc = cleaned["escalation"]
+    # Escalation cleaning (team name only)
+    esc = str(report.get("escalation") or "").strip()
     esc_low = esc.lower()
+
+    # Remove common runbook sentence wrappers
     if esc_low.startswith("escalate to "):
-        esc = esc[len("escalate to "):].strip()
-    if " if " in esc.lower():
+        esc = esc[len("escalate to ") :].strip()
+
+    # Remove conditional clause
+    if " if " in esc_low:
         esc = esc.split(" if ", 1)[0].strip()
+
+    # Remove trailing punctuation
+    esc = esc.strip(" .:-")
+
     cleaned["escalation"] = esc or "Unknown"
 
-    # ---- lists ----
     cleaned["what_we_know"] = _normalize_list(report.get("what_we_know"), max_items=6) or ["Unknown"]
     cleaned["what_we_dont_know"] = _normalize_list(report.get("what_we_dont_know"), max_items=5) or ["Unknown"]
 
-    # ---- hypotheses ----
     hyps = _normalize_hypotheses(report.get("hypotheses"), max_items=4)
     cleaned["hypotheses"] = hyps or [
         {
@@ -324,68 +350,57 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
         }
     ]
 
-    # ---- plan ----
     plan = _normalize_plan(report.get("recommended_plan"))
-
-    # Optional safety check (stronger):
-    # Keep "if_unresolved" for escalation/deeper investigation, not normal mitigation.
-    def looks_like_mitigation(line: str) -> bool:
-        l = (line or "").lower()
-        return any(k in l for k in ["roll back", "rollback", "retry", "disable", "restart", "clear cache"])
-
-    moved: List[str] = []
-    kept: List[str] = []
-    for x in plan.get("if_unresolved", []):
-        if looks_like_mitigation(x):
-            moved.append(x)
-        else:
-            kept.append(x)
-
-    plan["if_unresolved"] = kept
-
-    # Move mitigation-ish lines into "next" instead
-    for x in moved:
-        if x not in plan["next"]:
-            plan["next"].append(x)
-
-    # If if_unresolved is empty after filtering, put a sane default
-    if not plan["if_unresolved"]:
-        # Prefer using the cleaned escalation target if it exists
-        if cleaned["escalation"] != "Unknown":
-            plan["if_unresolved"] = [f"Escalate to {cleaned['escalation']}."]
-        else:
-            plan["if_unresolved"] = ["Escalate to the appropriate on-call/owner and continue deeper investigation."]
-
-    # If the whole plan is empty somehow, hard fallback
     if not (plan["now"] or plan["next"] or plan["if_unresolved"]):
         plan = {"now": ["Unknown"], "next": ["Unknown"], "if_unresolved": ["Unknown"]}
-
     cleaned["recommended_plan"] = plan
 
-    # ---- sources ----
+    # Force sources to deterministic sources (runbooks + company docs)
     cleaned["sources"] = sources
 
     return cleaned
 
 
 def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
-    ready = bool(det_summary.get("ready", False))
+    """
+    AI incident report (validated JSON) grounded by citations + company docs.
+
+    Returns:
+      {
+        "ai_report": dict | None,
+        "used_sources": [ids],
+        "refusal": str | None
+      }
+    """
+    # Sources from deterministic layer (runbooks)
     sources = det_summary.get("sources", []) or []
 
-    if not ready or not sources:
+    # Company sources always available (if files exist)
+    company_docs = retrieve_company_docs(
+        ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
+        max_chars=400,
+    )
+    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+
+    # Ready rule: allow AI if either runbooks OR company docs exist
+    ready = bool(sources or company_sources)
+
+    if not ready:
         return {
             "ai_report": None,
             "used_sources": [],
-            "refusal": "AI report unavailable: no citations/sources to ground the output.",
+            "refusal": "AI report unavailable: no sources (runbooks or company docs) available to ground the output.",
         }
 
     prompt = _build_prompt(det_summary)
     text = _ollama_generate(prompt)
 
+    used_sources = sources + company_sources
+
     if not text:
         return {
             "ai_report": None,
-            "used_sources": sources,
+            "used_sources": used_sources,
             "refusal": "AI unavailable: Ollama is not reachable. Start it with `ollama serve`.",
         }
 
@@ -393,20 +408,20 @@ def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
     if not parsed:
         return {
             "ai_report": None,
-            "used_sources": sources,
+            "used_sources": used_sources,
             "refusal": "AI output invalid: model did not return valid JSON.",
         }
 
-    cleaned = _validate_and_fix_report(parsed, sources)
+    cleaned = _validate_and_fix_report(parsed, used_sources)
     if not cleaned:
         return {
             "ai_report": None,
-            "used_sources": sources,
+            "used_sources": used_sources,
             "refusal": "AI output invalid: JSON did not match the required schema.",
         }
 
     return {
         "ai_report": cleaned,
-        "used_sources": sources,
+        "used_sources": used_sources,
         "refusal": None,
     }

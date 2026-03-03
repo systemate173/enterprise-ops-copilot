@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Dict, List, Any, Optional
+from src.company_retrieve import retrieve_company_docs
 
 
 # Headings we’ll try to mine for actionable bullets (in priority order)
@@ -200,14 +201,24 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     category = _clean_label(ticket.get("category", "Unknown"))
     urgency = _clean_label(ticket.get("urgency", "Unknown"))
     impact = _clean_label(ticket.get("impact", "Unknown/unclear impact"))
+    
+    description = str(ticket.get("description") or "")
+    incident_facts = _extract_incident_facts(description, max_items=5)
 
     confidence = ticket.get("confidence", None)
     needs_review = bool(ticket.get("needs_human_review", False))
     suspected_systems = ticket.get("suspected_systems", []) or []
 
-    sources = [c.get("doc_id") for c in citations if c.get("doc_id")]
+    runbook_sources = [c.get("doc_id") for c in citations if c.get("doc_id")]
+
+    company_docs = retrieve_company_docs(
+    ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
+    max_chars=250,)
+    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+
+    sources = runbook_sources + company_sources
     ready = bool(sources)
-    blocker_reason = None if ready else "no_citations"
+    blocker_reason = None if ready else "no_sources"
 
     # Deterministic highlights (only if we actually have citations)
     highlights: List[str] = _highlights_from_citations(citations, max_total=4) if ready else []
