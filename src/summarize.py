@@ -201,7 +201,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     category = _clean_label(ticket.get("category", "Unknown"))
     urgency = _clean_label(ticket.get("urgency", "Unknown"))
     impact = _clean_label(ticket.get("impact", "Unknown/unclear impact"))
-    
+
     description = str(ticket.get("description") or "")
     incident_facts = _extract_incident_facts(description, max_items=5)
 
@@ -209,16 +209,22 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     needs_review = bool(ticket.get("needs_human_review", False))
     suspected_systems = ticket.get("suspected_systems", []) or []
 
+    # Runbook/citation grounding
     runbook_sources = [c.get("doc_id") for c in citations if c.get("doc_id")]
 
-    company_docs = retrieve_company_docs(
-    ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
-    max_chars=250,)
-    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+    #Ready should mean: we have citations/runbooks to ground output
+    ready = bool(runbook_sources)
+    blocker_reason = None if ready else "no_citations"
 
-    sources = runbook_sources + company_sources
-    ready = bool(sources)
-    blocker_reason = None if ready else "no_sources"
+    company_sources: List[str] = []
+    if ready:
+        company_docs = retrieve_company_docs(
+            ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
+            max_chars=250,
+        )
+        company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+
+    sources = _dedupe_preserve_order(runbook_sources + company_sources)
 
     # Deterministic highlights (only if we actually have citations)
     highlights: List[str] = _highlights_from_citations(citations, max_total=4) if ready else []
@@ -243,15 +249,14 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     actions = ticket.get("next_actions", []) or []
     questions = ticket.get("missing_info_questions", []) or []
-    incident_facts = _extract_incident_facts(ticket.get("description", ""), max_items=5)
 
     return {
         "ready": ready,
         "blocker_reason": blocker_reason,
         "summary": summary,
         "incident_facts": incident_facts,
-        "highlights": highlights,              # NEW: deterministic, citation-derived bullets
-        "escalation_note": escalation_note,    # NEW: deterministic rule for High urgency (else None)
+        "highlights": highlights,
+        "escalation_note": escalation_note,
         "escalation_targets": escalation_targets,
         "key_details": {
             "ticket_id": ticket.get("ticket_id"),
