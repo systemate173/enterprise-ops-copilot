@@ -6,8 +6,6 @@ import re
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from src.company_retrieve import retrieve_company_docs
-
 
 # Ollama local server + model
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
@@ -81,6 +79,16 @@ ESCALATION_ALLOWLIST_BY_SYSTEM = {
     "Logistics": ["Logistics Ops", "Warehouse Ops"],
 }
 
+def _dedupe_preserve_order(items: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for x in items:
+        x = (x or "").strip()
+        if not x or x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
 
 def _normalize_list(value: Any, max_items: int = 6) -> List[str]:
     if value is None:
@@ -247,19 +255,10 @@ def _build_prompt(det: Dict[str, Any]) -> str:
 
     allowed_teams = _allowed_escalation_teams(det)
 
-    # Always include company docs as allowed facts (RAG v1)
-    company_docs = retrieve_company_docs(
-        ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
-        max_chars=900,
-    )
-    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
-
     def bullets(items: List[str]) -> str:
         return "\n".join([f"- {x}" for x in items]) if items else "- (none)"
 
-    company_context = "\n\n".join(
-        [f"[{d['doc_id']}]\n{d.get('excerpt','')}".strip() for d in company_docs]
-    ).strip() or "(none)"
+    company_context = (det.get("company_context") or "").strip() or "(none)"
 
     schema_text = (
         "{\n"
@@ -275,9 +274,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         "}"
     )
 
-    # Combine sources: deterministic runbooks + company docs
-    all_sources = sources + company_sources
-    srcs = ", ".join(all_sources) if all_sources else "(none)"
+    srcs = ", ".join(sources) if sources else "(none)"
 
     return (
         "You are a senior incident commander writing a reliable, business-useful incident report.\n\n"
@@ -362,40 +359,19 @@ def _validate_and_fix_report(report: Dict[str, Any], sources: List[str]) -> Opti
 
 
 def ai_manager_summary(det_summary: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    AI incident report (validated JSON) grounded by citations + company docs.
+    raw_sources = det_summary.get("sources", []) or []
+    used_sources = _dedupe_preserve_order([s for s in raw_sources if isinstance(s, str)])
 
-    Returns:
-      {
-        "ai_report": dict | None,
-        "used_sources": [ids],
-        "refusal": str | None
-      }
-    """
-    # Sources from deterministic layer (runbooks)
-    sources = det_summary.get("sources", []) or []
-
-    # Company sources always available (if files exist)
-    company_docs = retrieve_company_docs(
-        ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
-        max_chars=400,
-    )
-    company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
-
-    # Ready rule: allow AI if either runbooks OR company docs exist
-    ready = bool(sources or company_sources)
-
+    ready = bool(used_sources)
     if not ready:
         return {
             "ai_report": None,
             "used_sources": [],
-            "refusal": "AI report unavailable: no sources (runbooks or company docs) available to ground the output.",
+            "refusal": "AI report unavailable: no sources available to ground the output.",
         }
 
     prompt = _build_prompt(det_summary)
     text = _ollama_generate(prompt)
-
-    used_sources = sources + company_sources
 
     if not text:
         return {
