@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Any, Optional
 from src.company_retrieve import retrieve_company_docs
+from typing import Iterable
 
 
 # Headings we’ll try to mine for actionable bullets (in priority order)
@@ -15,8 +16,6 @@ HIGHLIGHT_SECTIONS = [
     "Rollback",
     "Verification",
 ]
-
-
 
 def _clean_label(value: Any) -> str:
     """
@@ -188,6 +187,18 @@ def _escalation_from_citations(citations: List[Dict[str, Any]], max_total: int =
                 return targets
     return targets
 
+def _dedupe_preserve_order(items: Iterable[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for x in items:
+        if not x:
+            continue
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
+
 
 def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -210,7 +221,11 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     suspected_systems = ticket.get("suspected_systems", []) or []
 
     # Runbook/citation grounding
-    runbook_sources = [c.get("doc_id") for c in citations if c.get("doc_id")]
+    runbook_sources: List[str] = [
+    str(doc_id).strip()
+    for c in citations
+    for doc_id in [c.get("doc_id")]
+    if isinstance(doc_id, str) and doc_id.strip()]
 
     #Ready should mean: we have citations/runbooks to ground output
     ready = bool(runbook_sources)
@@ -222,7 +237,12 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
             ["TEAM_DIRECTORY", "SYSTEM_OWNERSHIP", "ESCALATION_POLICY", "INCIDENT_SEVERITY"],
             max_chars=250,
         )
-        company_sources = [f"COMPANY:{d['doc_id']}" for d in company_docs]
+        company_sources = [
+             f"COMPANY:{doc_id}"
+            for d in company_docs
+            for doc_id in [d.get("doc_id")]
+            if isinstance(doc_id, str) and doc_id.strip()
+]
 
     sources = _dedupe_preserve_order(runbook_sources + company_sources)
 
