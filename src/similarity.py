@@ -99,7 +99,7 @@ def retrieve_similar_incidents(
     query_text: str,
     corpus: List[StoredIncident],
     top_k: int = 3,
-    min_score: float = 0.18,
+    min_score: float = 0.05,
 ) -> List[SimilarIncident]:
     """
     Deterministic incident similarity search.

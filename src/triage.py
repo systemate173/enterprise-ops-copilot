@@ -544,6 +544,8 @@ def triage_incident(text: str) -> Dict[str, Any]:
             f"category: {category.value if hasattr(category, 'value') else str(category)}",
             f"urgency: {urgency.value if hasattr(urgency, 'value') else str(urgency)}",
             f"impact: {impact}",
+            f"systems: {', '.join(suspected)}",
+            f"runbooks: {', '.join(recommended_runbooks)}",
             f"description: {raw}",
         ]
     )
@@ -552,7 +554,7 @@ def triage_incident(text: str) -> Dict[str, Any]:
         query_text=query_text,
         corpus=past_incidents,
         top_k=3,
-        min_score=0.18,
+        min_score=0.05,
     )
 
     current_ticket_id = _simple_ticket_id(raw)
