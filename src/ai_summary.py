@@ -252,6 +252,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
     actions = det.get("recommended_actions", []) or []
     questions = det.get("questions_to_answer", []) or []
     sources = det.get("sources", []) or []
+    similarity_note = (det.get("similarity_note") or "").strip()
 
     allowed_teams = _allowed_escalation_teams(det)
 
@@ -285,6 +286,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         "4) Output MUST be valid JSON and MUST match the schema exactly.\n"
         "5) Do NOT include any text outside the JSON.\n"
         "6) escalation MUST be a TEAM NAME chosen from the Allowed escalation teams list.\n\n"
+        "7) Similar incidents are REFERENCES ONLY; do not import facts from them unless explicitly included in Allowed Facts.\n\n"
         f"Schema:\n{schema_text}\n\n"
         "Allowed Facts:\n"
         f"- Deterministic summary: {summary}\n"
@@ -294,6 +296,7 @@ def _build_prompt(det: Dict[str, Any]) -> str:
         f"- Open questions:\n{bullets(questions)}\n"
         f"- Company context:\n{company_context}\n"
         f"- Allowed escalation teams (choose ONE): {', '.join(allowed_teams)}\n"
+        f"- Similarity note (reference only): {similarity_note or '(none)'}\n"
         f"- Sources: {srcs}\n\n"
         "Guidance:\n"
         "- executive_update: 1–2 sentences for leadership.\n"

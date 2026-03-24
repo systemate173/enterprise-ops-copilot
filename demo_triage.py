@@ -1,17 +1,35 @@
-
-
 import json
-
 from pathlib import Path
-from src.triage import triage_incident
+
+from src.ai_summary import ai_manager_summary
+from src.incident_store import IncidentStore, StoredIncident
 from src.retrieve import retrieve_runbooks
 from src.summarize import summarize_ticket
-from src.ai_summary import ai_manager_summary
-
-
+from src.triage import triage_incident
 
 
 EXAMPLES_DIR = Path(__file__).parent / "examples" / "incidents"
+
+
+def _persist_ticket_for_similarity(ticket: dict) -> None:
+    """
+    Persist a minimal incident record so future triage runs can retrieve similar incidents.
+    This is intentionally best-effort and should not block the demo flow.
+    """
+    try:
+        IncidentStore().append(
+            StoredIncident(
+                incident_id=str(ticket.get("ticket_id") or ""),
+                created_at_utc=str(ticket.get("created_at_utc") or ""),
+                title=str(ticket.get("title") or ""),
+                description=str(ticket.get("description") or ""),
+                category=str(ticket.get("category") or ""),
+                urgency=str(ticket.get("urgency") or ""),
+                impact=str(ticket.get("impact") or ""),
+            )
+        )
+    except Exception as exc:
+        print(f"(Warning) Could not store incident for similarity retrieval: {exc}")
 
 
 def _print_ticket(ticket: dict) -> None:
@@ -22,7 +40,6 @@ def _print_ticket(ticket: dict) -> None:
 
     print("\n--- RETRIEVED DOCUMENTATION ---")
 
-    docs = []
     if not runbooks:
         print("(No runbooks recommended.)")
     else:
@@ -37,10 +54,12 @@ def _print_ticket(ticket: dict) -> None:
     summary = summarize_ticket(ticket)
     print("\n--- MANAGER SUMMARY (DETERMINISTIC) ---")
     print(json.dumps(summary, indent=2))
+
     print("\n--- MANAGER REPORT (AI, VALIDATED JSON) ---")
     ai = ai_manager_summary(summary)
     print(json.dumps(ai, indent=2))
 
+    _persist_ticket_for_similarity(ticket)
 
 
 def _load_example_files() -> list[Path]:
@@ -77,11 +96,13 @@ def _choose_example(files: list[Path]) -> str | None:
 def _paste_incident() -> str:
     print("\nPaste an incident description. End with an empty line.\n")
     lines: list[str] = []
+
     while True:
         line = input()
         if line.strip() == "":
             break
         lines.append(line)
+
     return "\n".join(lines).strip()
 
 
@@ -123,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

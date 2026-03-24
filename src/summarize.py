@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
 from src.company_retrieve import retrieve_company_docs
-from typing import Iterable
 
 
-# Headings we’ll try to mine for actionable bullets (in priority order)
 HIGHLIGHT_SECTIONS = [
     "Initial Checks",
     "Immediate Actions",
@@ -16,6 +15,7 @@ HIGHLIGHT_SECTIONS = [
     "Rollback",
     "Verification",
 ]
+
 
 def _clean_label(value: Any) -> str:
     """
@@ -28,7 +28,6 @@ def _clean_label(value: Any) -> str:
     if value is None:
         return "Unknown"
 
-    # If it's an Enum instance, prefer its .value
     if hasattr(value, "value"):
         try:
             value = value.value
@@ -37,18 +36,14 @@ def _clean_label(value: Any) -> str:
 
     s = str(value).strip()
 
-    # If it's "Category.OPERATIONS" or "Urgency.HIGH" -> take RHS
     if "." in s and (s.startswith("Category.") or s.startswith("Urgency.")):
         s = s.split(".", 1)[1].strip()
 
-    # If it's an enum-style token "GENERAL_OPS" -> "General Ops"
     if re.fullmatch(r"[A-Z0-9_]+", s):
         s = s.replace("_", " ").title()
 
-    # Common normalization
     s = s.replace("  ", " ").strip()
 
-    # Preserve known casing conventions
     if s.lower() in ("it ops", "itops"):
         return "IT Ops"
 
@@ -59,9 +54,9 @@ def _extract_section_block(md: str, heading: str) -> str:
     """
     Return markdown text under a given heading until the next heading.
     Heading match is case-insensitive and supports:
-      - "# Heading"
-      - "## Heading"
-      - "### Heading"
+      - # Heading
+      - ## Heading
+      - ### Heading
     """
     if not md:
         return ""
@@ -78,7 +73,6 @@ def _extract_section_block(md: str, heading: str) -> str:
     if start_idx is None:
         return ""
 
-    # Gather until next heading
     out: List[str] = []
     next_heading_re = re.compile(r"^\s{0,3}#{1,6}\s+")
     for j in range(start_idx, len(lines)):
@@ -88,15 +82,15 @@ def _extract_section_block(md: str, heading: str) -> str:
 
     return "\n".join(out).strip()
 
+
 def _extract_incident_facts(description: str, max_items: int = 5) -> List[str]:
     """
     Deterministically extract a few high-signal facts from the incident description.
-    Keeps it simple: first non-empty lines, trimmed.
     """
     if not description:
         return []
-    lines = [ln.strip() for ln in description.splitlines() if ln.strip()]
-    # Return first N lines (stable + predictable)
+
+    lines = [line.strip() for line in description.splitlines() if line.strip()]
     return lines[:max_items]
 
 
@@ -115,20 +109,18 @@ def _extract_bullets(text: str, max_items: int = 4) -> List[str]:
     for line in text.splitlines():
         line = line.rstrip()
 
-        m = re.match(r"^\s*[-*]\s+(.*)$", line)
-        if m:
-            item = m.group(1).strip()
+        match = re.match(r"^\s*[-*]\s+(.*)$", line)
+        if match:
+            item = match.group(1).strip()
         else:
-            m = re.match(r"^\s*\d+\.\s+(.*)$", line)
-            if not m:
+            match = re.match(r"^\s*\d+\.\s+(.*)$", line)
+            if not match:
                 continue
-            item = m.group(1).strip()
+            item = match.group(1).strip()
 
-        # Skip empty / junk
         if not item:
             continue
 
-        # Keep items compact (avoid huge wrapped bullets from excerpts)
         if len(item) > 200:
             item = item[:197].rstrip() + "..."
 
@@ -142,72 +134,104 @@ def _extract_bullets(text: str, max_items: int = 4) -> List[str]:
 
 def _highlights_from_citations(citations: List[Dict[str, Any]], max_total: int = 4) -> List[str]:
     """
-    Mine up to N highlight bullets across citations, in a deterministic order:
-      - citation order
-      - section priority order
-      - bullet order in excerpt
+    Mine highlight bullets from runbook excerpts in deterministic order.
     """
     highlights: List[str] = []
     seen = set()
 
-    for c in citations or []:
-        excerpt = (c.get("excerpt") or "").strip()
+    for citation in citations or []:
+        excerpt = (citation.get("excerpt") or "").strip()
         if not excerpt:
             continue
 
         for section in HIGHLIGHT_SECTIONS:
             block = _extract_section_block(excerpt, section)
-            for b in _extract_bullets(block, max_items=max_total):
-                key = b.lower()
+            for bullet in _extract_bullets(block, max_items=max_total):
+                key = bullet.lower()
                 if key in seen:
                     continue
                 seen.add(key)
-                highlights.append(b)
+                highlights.append(bullet)
+
                 if len(highlights) >= max_total:
                     return highlights
 
     return highlights
 
+
 def _escalation_from_citations(citations: List[Dict[str, Any]], max_total: int = 2) -> List[str]:
     targets: List[str] = []
     seen = set()
 
-    for c in citations or []:
-        excerpt = (c.get("excerpt") or "").strip()
+    for citation in citations or []:
+        excerpt = (citation.get("excerpt") or "").strip()
         if not excerpt:
             continue
+
         block = _extract_section_block(excerpt, "Escalation")
-        for b in _extract_bullets(block, max_items=max_total):
-            k = b.lower()
-            if k in seen:
+        for bullet in _extract_bullets(block, max_items=max_total):
+            key = bullet.lower()
+            if key in seen:
                 continue
-            seen.add(k)
-            targets.append(b)
+            seen.add(key)
+            targets.append(bullet)
+
             if len(targets) >= max_total:
                 return targets
+
     return targets
+
 
 def _dedupe_preserve_order(items: Iterable[str]) -> List[str]:
     seen = set()
     out: List[str] = []
-    for x in items:
-        if not x:
+
+    for item in items:
+        if not item:
             continue
-        if x in seen:
+        if item in seen:
             continue
-        seen.add(x)
-        out.append(x)
+        seen.add(item)
+        out.append(item)
+
     return out
+
+
+def _build_similarity_note(similar_incidents: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    Build a safe reference-only similarity note.
+
+    Important:
+    - This does NOT import facts from past incidents.
+    - It only signals that similar incidents exist and provides IDs/titles as references.
+    """
+    if not similar_incidents:
+        return None
+
+    top = similar_incidents[0]
+
+    incident_id = str(top.get("incident_id") or "").strip()
+    title = str(top.get("title") or "").strip()
+    score = top.get("score")
+
+    if not incident_id:
+        return None
+
+    if isinstance(score, (int, float)):
+        return f"Similar past incident identified: {incident_id} (score={score:.3f}) — {title}."
+    return f"Similar past incident identified: {incident_id} — {title}."
 
 
 def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     """
     Deterministic summary layer (no AI).
 
-    Output is a stable JSON contract that a UI/API could consume.
+    Output is a stable JSON contract that UI/API/LLM layers can consume.
+    Similar incidents are references only and must not be treated as incident facts.
     """
     citations: List[Dict[str, Any]] = ticket.get("citations", []) or []
     runbooks: List[str] = ticket.get("recommended_runbooks", []) or []
+    similar_incidents: List[Dict[str, Any]] = ticket.get("similar_incidents", []) or []
 
     category = _clean_label(ticket.get("category", "Unknown"))
     urgency = _clean_label(ticket.get("urgency", "Unknown"))
@@ -216,18 +240,17 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
     description = str(ticket.get("description") or "")
     incident_facts = _extract_incident_facts(description, max_items=5)
 
-    confidence = ticket.get("confidence", None)
+    confidence = ticket.get("confidence")
     needs_review = bool(ticket.get("needs_human_review", False))
     suspected_systems = ticket.get("suspected_systems", []) or []
 
-    # Runbook/citation grounding
     runbook_sources: List[str] = [
-    str(doc_id).strip()
-    for c in citations
-    for doc_id in [c.get("doc_id")]
-    if isinstance(doc_id, str) and doc_id.strip()]
+        str(doc_id).strip()
+        for citation in citations
+        for doc_id in [citation.get("doc_id")]
+        if isinstance(doc_id, str) and doc_id.strip()
+    ]
 
-    #Ready should mean: we have citations/runbooks to ground output
     ready = bool(runbook_sources)
     blocker_reason = None if ready else "no_citations"
 
@@ -238,19 +261,23 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
             max_chars=250,
         )
         company_sources = [
-             f"COMPANY:{doc_id}"
-            for d in company_docs
-            for doc_id in [d.get("doc_id")]
+            f"COMPANY:{doc_id}"
+            for doc in company_docs
+            for doc_id in [doc.get("doc_id")]
             if isinstance(doc_id, str) and doc_id.strip()
-]
+        ]
 
-    sources = _dedupe_preserve_order(runbook_sources + company_sources)
+    similar_sources: List[str] = []
+    for item in similar_incidents:
+        incident_id = str(item.get("incident_id") or "").strip()
+        if incident_id:
+            similar_sources.append(f"INCIDENT:{incident_id}")
 
-    # Deterministic highlights (only if we actually have citations)
+    sources = _dedupe_preserve_order(runbook_sources + company_sources + similar_sources)
+
     highlights: List[str] = _highlights_from_citations(citations, max_total=4) if ready else []
-
-    # Escalation note: deterministic rule on urgency
     escalation_targets = _escalation_from_citations(citations, max_total=2) if ready else []
+
     escalation_note = None
     if urgency.lower() == "high":
         escalation_note = (
@@ -258,7 +285,8 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "Include start time, current status, scope (users/locations), and any error text/logs."
         )
 
-    # Summary sentence
+    similarity_note = _build_similarity_note(similar_incidents)
+
     summary = f"{category} incident with {urgency} urgency. Impact: {impact}."
     if confidence is not None:
         summary += f" Confidence: {confidence}."
@@ -266,6 +294,8 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
         summary += " Human review recommended."
     if ready and highlights:
         summary += " Key runbook checks available."
+    if similarity_note:
+        summary += " Similar historical incident reference available."
 
     actions = ticket.get("next_actions", []) or []
     questions = ticket.get("missing_info_questions", []) or []
@@ -278,6 +308,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
         "highlights": highlights,
         "escalation_note": escalation_note,
         "escalation_targets": escalation_targets,
+        "similarity_note": similarity_note,
         "key_details": {
             "ticket_id": ticket.get("ticket_id"),
             "category": category,
@@ -287,6 +318,7 @@ def summarize_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "needs_human_review": needs_review,
             "suspected_systems": suspected_systems,
             "recommended_runbooks": runbooks,
+            "similar_incidents": similar_incidents[:3],
         },
         "recommended_actions": actions[:5],
         "questions_to_answer": questions[:5],
